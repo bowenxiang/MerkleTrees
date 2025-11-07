@@ -195,7 +195,7 @@ def send_signed_msg(proof, random_leaf):
     signed_tx = acct.sign_transaction(tx_data)
 
     # Send the transaction
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx['rawTransaction'])
     
     # Wait for the transaction receipt (optional but good practice)
     print("Transaction sent, waiting for receipt...")
