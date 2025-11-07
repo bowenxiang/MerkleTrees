@@ -192,7 +192,7 @@ def send_signed_msg(proof, random_leaf):
     })
 
     # Sign the transaction
-    signed_tx = w3.eth.account.sign_transaction(tx_data, private_key=acct.key)
+    signed_tx = acct.sign_transaction(tx_data)
 
     # Send the transaction
     tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
