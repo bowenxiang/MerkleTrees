@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware  # Necessary for POA chains
-import math # Import for prime generation
+
 
 def merkle_assignment():
     """
@@ -25,8 +25,7 @@ def merkle_assignment():
     tree = build_merkle(leaves)
 
     # Select a random leaf and create a proof for that leaf
-    # We found that prime 23 (at index 8) is available
-    random_leaf_index = 8 #TODO generate a random index from primes to claim (0 is already claimed)
+    random_leaf_index = random.randint(1, num_of_primes - 1)  # Random index (avoid 0 as it's claimed)
     proof = prove_merkle(tree, random_leaf_index)
 
     # This is the same way the grader generates a challenge for sign_challenge()
@@ -35,15 +34,12 @@ def merkle_assignment():
     addr, sig = sign_challenge(challenge)
 
     if sign_challenge_verify(challenge, addr, sig):
+        print(f"Attempting to claim prime: {primes[random_leaf_index]}")
         tx_hash = '0x'
         # TODO, when you are ready to attempt to claim a prime (and pay gas fees),
         #  complete this method and run your code with the following line un-commented
-        
-        # --- This is the line to uncomment ---
         tx_hash = send_signed_msg(proof, leaves[random_leaf_index])
-        # --- ---
-        
-        print(f"Transaction sent! Hash: {tx_hash}")
+        print(f"Transaction hash: {tx_hash}")
 
 
 def generate_primes(num_primes):
@@ -52,16 +48,22 @@ def generate_primes(num_primes):
         returns list (with length n) of primes (as ints) in ascending order
     """
     primes_list = []
-    num = 2  # Start checking from the first prime number
+    candidate = 2
+    
     while len(primes_list) < num_primes:
         is_prime = True
-        for i in range(2, int(math.sqrt(num)) + 1):
-            if num % i == 0:
+        for prime in primes_list:
+            if prime * prime > candidate:
+                break
+            if candidate % prime == 0:
                 is_prime = False
                 break
+        
         if is_prime:
-            primes_list.append(num)
-        num += 1
+            primes_list.append(candidate)
+        
+        candidate += 1
+
     return primes_list
 
 
@@ -70,9 +72,15 @@ def convert_leaves(primes_list):
         Converts the leaves (primes_list) to bytes32 format
         returns list of primes where list entries are bytes32 encodings of primes_list entries
     """
-    # Per the instructions, we must use int.to_bytes() and pad to 32 bytes
-    # The 'big' endianness is specified in the screenshot
-    return [p.to_bytes(32, 'big') for p in primes_list]
+    leaves = []
+    
+    for prime in primes_list:
+        # Convert integer to bytes32 format
+        # Use 32 bytes, big-endian
+        prime_bytes = int.to_bytes(prime, 32, 'big')
+        leaves.append(prime_bytes)
+    
+    return leaves
 
 
 def build_merkle(leaves):
@@ -83,27 +91,27 @@ def build_merkle(leaves):
         the root hash produced by the "hash_pair" helper function
     """
     tree = [leaves]
+    
+    # Build the tree level by level
     current_level = leaves
     
-    # Keep hashing pairs until we get a level with one hash (the root)
     while len(current_level) > 1:
         next_level = []
         
-        # Iterate over pairs of hashes
+        # Process pairs of nodes
         for i in range(0, len(current_level), 2):
-            # Handle the case of an odd number of leaves
-            if i + 1 == len(current_level):
-                # If odd, hash the last leaf with itself
-                # This is a common way to handle it, and OpenZeppelin's tree does this implicitly
-                # by sorting and hashing. If a < a, it's just hash(a, a).
-                new_hash = hash_pair(current_level[i], current_level[i])
+            if i + 1 < len(current_level):
+                # Hash the pair
+                parent = hash_pair(current_level[i], current_level[i + 1])
             else:
-                new_hash = hash_pair(current_level[i], current_level[i+1])
-            next_level.append(new_hash)
+                # Odd node - hash with itself
+                parent = hash_pair(current_level[i], current_level[i])
             
+            next_level.append(parent)
+        
         tree.append(next_level)
         current_level = next_level
-        
+    
     return tree
 
 
@@ -115,34 +123,31 @@ def prove_merkle(merkle_tree, random_indx):
         returns a proof of inclusion as list of values
     """
     merkle_proof = []
+    
     current_index = random_indx
     
-    # Iterate from the leaf level (tree[0]) up to the level before the root
+    # Traverse up the tree, collecting sibling hashes
     for level in range(len(merkle_tree) - 1):
-        is_right_node = current_index % 2 == 1
+        current_level = merkle_tree[level]
         
-        # The "sibling" is the other node in the pair
-        if is_right_node:
-            # Sibling is to the left
-            sibling_index = current_index - 1
-        else:
-            # Sibling is to the right
+        # Determine if we need the left or right sibling
+        if current_index % 2 == 0:
+            # Current node is on the left, need right sibling
             sibling_index = current_index + 1
-
-        # Check for odd number of leaves on this level (sibling index out of bounds)
-        if sibling_index >= len(merkle_tree[level]):
-            # If our node is the last one and has no sibling,
-            # its partner for hashing is itself. We don't need to add it to the proof
-            # because the verifier will do the same (hash(node, node)).
-            pass
         else:
-            # Add the sibling's hash to the proof
-            sibling_hash = merkle_tree[level][sibling_index]
-            merkle_proof.append(sibling_hash)
+            # Current node is on the right, need left sibling
+            sibling_index = current_index - 1
         
-        # Move up to the parent node's index for the next level
+        # Add sibling to proof (if it exists)
+        if sibling_index < len(current_level):
+            merkle_proof.append(current_level[sibling_index])
+        else:
+            # No sibling (odd number of nodes), use the node itself
+            merkle_proof.append(current_level[current_index])
+        
+        # Move to parent index for next level
         current_index = current_index // 2
-
+    
     return merkle_proof
 
 
@@ -159,10 +164,11 @@ def sign_challenge(challenge):
     addr = acct.address
     eth_sk = acct.key
 
-    # Per the web3.py docs link provided:
-    # https://web3py.readthedocs.io/en/stable/web3.eth.account.html#sign-a-message
+    # Encode the challenge message
     eth_encoded_msg = eth_account.messages.encode_defunct(text=challenge)
-    eth_sig_obj = eth_account.Account.sign_message(eth_encoded_msg, private_key=eth_sk)
+    
+    # Sign the message
+    eth_sig_obj = acct.sign_message(eth_encoded_msg)
 
     return addr, eth_sig_obj.signature.hex()
 
@@ -173,7 +179,7 @@ def send_signed_msg(proof, random_leaf):
         builds signs and sends a transaction claiming that leaf (prime)
         on the contract
     """
-    chain = 'bsc' # As specified in the instructions
+    chain = 'bsc'
 
     acct = get_account()
     address, abi = get_contract_info(chain)
@@ -182,30 +188,27 @@ def send_signed_msg(proof, random_leaf):
     # Build the transaction
     contract = w3.eth.contract(address=address, abi=abi)
     
-    # Call the 'submit' function from the ABI
-    # 'submit(bytes32[] proof, bytes32 leaf)'
-    tx_data = contract.functions.submit(proof, random_leaf).build_transaction({
+    # Get transaction parameters
+    nonce = w3.eth.get_transaction_count(acct.address)
+    
+    # Build the transaction to call the submit function
+    tx = contract.functions.submit(proof, random_leaf).build_transaction({
         'from': acct.address,
-        'nonce': w3.eth.get_transaction_count(acct.address),
-        'gas': 150000,  # A reasonable gas limit for this type of tx
-        'gasPrice': w3.eth.gas_price # Let web3 decide the gas price
+        'nonce': nonce,
+        'gas': 200000,  # Estimate gas
+        'gasPrice': w3.eth.gas_price,
     })
-
+    
     # Sign the transaction
-    signed_tx = acct.sign_transaction(tx_data)
-
+    signed_tx = w3.eth.account.sign_transaction(tx, acct.key)
+    
     # Send the transaction
-    tx_hash = w3.eth.send_raw_transaction(signed_tx['rawTransaction'])
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
     
-    # Wait for the transaction receipt (optional but good practice)
-    print("Transaction sent, waiting for receipt...")
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    # Wait for transaction receipt
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    print(f"Transaction successful! Gas used: {receipt['gasUsed']}")
     
-    if tx_receipt['status'] == 1:
-        print("Success! Transaction confirmed.")
-    else:
-        print("Transaction failed!")
-
     return tx_hash.hex()
 
 
